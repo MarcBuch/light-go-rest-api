@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -61,6 +63,37 @@ func (h *coasterHandlers) get(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonBytes)
 }
 
+func (h *coasterHandlers) getCoaster(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.String(), "/")
+
+	if len(parts) != 3 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Lock the store on read
+	h.Lock()
+	coaster, ok := h.store[parts[2]]
+	h.Unlock()
+
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	jsonBytes, err := json.Marshal(coaster)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	w.Header().Add("content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonBytes)
+
+}
+
 func (h *coasterHandlers) post(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := ioutil.ReadAll(r.Body)
 	defer r.Body.Close()
@@ -94,21 +127,42 @@ func (h *coasterHandlers) post(w http.ResponseWriter, r *http.Request) {
 
 func newCoasterHandlers() *coasterHandlers {
 	return &coasterHandlers{
-		store: map[string]Coaster{
-			"id1": Coaster{
-				Name:         "Fury 325",
-				Height:       99,
-				ID:           "id1",
-				InPark:       "Carowinds",
-				Manufacturer: "B+M",
-			},
-		},
+		store: map[string]Coaster{},
 	}
 }
 
+type adminPortal struct {
+	password string
+}
+
+func newAdminPortal() *adminPortal {
+	password := os.Getenv("ADMIN_PASSWORD")
+
+	if password == "" {
+		panic("required env var ADMIN_PASSWORD not set")
+	}
+
+	return &adminPortal{password: password}
+}
+
+func (a adminPortal) handler(w http.ResponseWriter, r *http.Request) {
+	user, pass, ok := r.BasicAuth()
+
+	if !ok || user != "admin" || pass != a.password {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("401 - unauthorized"))
+		return
+	}
+
+	w.Write([]byte("<html><h1>Super secret admin portal</h1></html>"))
+}
+
 func main() {
+	admin := newAdminPortal()
 	coasterHandlers := newCoasterHandlers()
 	http.HandleFunc("/coasters", coasterHandlers.coasters)
+	http.HandleFunc("/coasters/", coasterHandlers.getCoaster)
+	http.HandleFunc("/admin", admin.handler)
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
 		panic(err)
